@@ -16,17 +16,13 @@ on:
 jobs:
   build-and-test:
     strategy:
-      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            profile: linux-gcc
             shell: bash
           - os: windows-latest
-            profile: windows-msvc
             shell: pwsh
           - os: macos-latest
-            profile: macos-clang
             shell: bash
 
     runs-on: ${{ matrix.os }}
@@ -64,10 +60,8 @@ jobs:
             --build=missing `
             ${{ inputs.use_lockfile && '--lockfile=conan.lock' || '# do not use a lockfile' }}
 
-      - name: Upload Test Results
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: package
-          path: |
-            ${{ inputs.source_directory }}/build/**/Testing/
-            ${{ inputs.source_directory }}/build/**/*test*.xml
+          path: ${{ inputs.source_directory }}/build/
