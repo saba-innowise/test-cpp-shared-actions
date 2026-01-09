@@ -1,0 +1,170 @@
+name: C++ Lint (clang-format)
+
+on:
+  workflow_call:
+    inputs:
+      source-dir:
+        description: 'Directory containing C++ source files to check'
+        required: false
+        type: string
+        default: '.'
+      clang-format-version:
+        description: 'Version of clang-format to use'
+        required: false
+        type: string
+        default: '17'
+      config-file:
+        description: 'Path to .clang-format configuration file (optional)'
+        required: false
+        type: string
+        default: ''
+      file-extensions:
+        description: 'Comma-separated list of file extensions to check'
+        required: false
+        type: string
+        default: 'cpp,hpp,c,h'
+
+jobs:
+  clang-format-check:
+    name: clang-format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format-${{ inputs.clang-format-version }}
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-${{ inputs.clang-format-version }} 100
+
+      - name: Verify clang-format version
+        run: |
+          echo "Using clang-format version:"
+          clang-format --version
+
+      - name: Find C++ files
+        id: find-files
+        run: |
+          # Convert comma-separated extensions to find patterns
+          EXTENSIONS="${{ inputs.file-extensions }}"
+          SOURCE_DIR="${{ inputs.source-dir }}"
+
+          # Build find command with multiple -name patterns
+          FIND_ARGS=""
+          IFS=',' read -ra EXT_ARRAY <<< "$EXTENSIONS"
+          for i in "${!EXT_ARRAY[@]}"; do
+            ext="${EXT_ARRAY[$i]}"
+            if [ $i -eq 0 ]; then
+              FIND_ARGS="-name \"*.${ext}\""
+            else
+              FIND_ARGS="$FIND_ARGS -o -name \"*.${ext}\""
+            fi
+          done
+
+          # Find all matching files
+          FILES=$(eval "find \"$SOURCE_DIR\" -type f \( $FIND_ARGS \)" 2>/dev/null | sort)
+
+          if [ -z "$FILES" ]; then
+            echo "No C++ files found matching extensions: $EXTENSIONS in directory: $SOURCE_DIR"
+            echo "files_found=false" >> $GITHUB_OUTPUT
+          else
+            echo "Found files to check:"
+            echo "$FILES"
+            echo "files_found=true" >> $GITHUB_OUTPUT
+            # Save files to a temporary file for later use
+            echo "$FILES" > /tmp/cpp_files.txt
+          fi
+
+      - name: Copy custom config file
+        if: steps.find-files.outputs.files_found == 'true' && inputs.config-file != ''
+        run: |
+          CONFIG_FILE="${{ inputs.config-file }}"
+          if [ -f "$CONFIG_FILE" ]; then
+            echo "Using custom .clang-format from: $CONFIG_FILE"
+            cp "$CONFIG_FILE" "${{ inputs.source-dir }}/.clang-format"
+          else
+            echo "::error::Specified config file not found: $CONFIG_FILE"
+            exit 1
+          fi
+
+      - name: Run clang-format check
+        if: steps.find-files.outputs.files_found == 'true'
+        id: format-check
+        run: |
+          set +e  # Don't exit on error, we want to capture the diff
+
+          FILES=$(cat /tmp/cpp_files.txt)
+          FORMATTING_ISSUES=0
+          DIFF_OUTPUT=""
+
+          echo "Checking formatting for C++ files..."
+          echo "========================================"
+
+          while IFS= read -r file; do
+            if [ -n "$file" ]; then
+              # Get the formatted output
+              FORMATTED=$(clang-format --style=file --fallback-style=LLVM "$file")
+              ORIGINAL=$(cat "$file")
+
+              if [ "$FORMATTED" != "$ORIGINAL" ]; then
+                FORMATTING_ISSUES=$((FORMATTING_ISSUES + 1))
+                echo ""
+                echo "::error file=$file::Formatting issues found in $file"
+                echo ""
+                echo "=== Diff for: $file ==="
+                # Show the diff with color and context
+                diff -u --color=always "$file" <(echo "$FORMATTED") || true
+                echo ""
+              fi
+            fi
+          done <<< "$FILES"
+
+          echo ""
+          echo "========================================"
+
+          if [ $FORMATTING_ISSUES -gt 0 ]; then
+            echo ""
+            echo "::error::Found formatting issues in $FORMATTING_ISSUES file(s)"
+            echo ""
+            echo "To fix these issues, run:"
+            echo "  clang-format -i <file>"
+            echo ""
+            echo "Or to fix all files at once, run:"
+            EXTENSIONS="${{ inputs.file-extensions }}"
+            IFS=',' read -ra EXT_ARRAY <<< "$EXTENSIONS"
+            for ext in "${EXT_ARRAY[@]}"; do
+              echo "  find ${{ inputs.source-dir }} -name \"*.${ext}\" -exec clang-format -i {} \\;"
+            done
+            echo ""
+            exit 1
+          else
+            echo "All files are properly formatted!"
+            exit 0
+          fi
+
+      - name: Summary
+        if: always() && steps.find-files.outputs.files_found == 'true'
+        run: |
+          echo "## C++ Lint Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **clang-format version:** ${{ inputs.clang-format-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Source directory:** ${{ inputs.source-dir }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **File extensions:** ${{ inputs.file-extensions }}" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ inputs.config-file }}" ]; then
+            echo "- **Config file:** ${{ inputs.config-file }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo ":white_check_mark: All C++ files are properly formatted!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo ":x: Formatting issues were found. See the job logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: No files found notice
+        if: steps.find-files.outputs.files_found == 'false'
+        run: |
+          echo "## C++ Lint Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo ":warning: No C++ files found matching extensions: ${{ inputs.file-extensions }} in directory: ${{ inputs.source-dir }}" >> $GITHUB_STEP_SUMMARY

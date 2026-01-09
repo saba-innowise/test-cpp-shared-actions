@@ -1,0 +1,164 @@
+name: Conan Package Publish
+
+on:
+  workflow_call:
+    inputs:
+      source-dir:
+        description: 'Directory containing the conanfile.py'
+        required: false
+        default: '.'
+        type: string
+      package-name:
+        description: 'Name of the Conan package'
+        required: true
+        type: string
+      package-version:
+        description: 'Version of the package (without suffix)'
+        required: true
+        type: string
+      version-suffix:
+        description: 'Version suffix for RC builds (e.g., dev-abc123)'
+        required: false
+        default: ''
+        type: string
+      remote-name:
+        description: 'Conan remote name (conan-rc or conan-stable)'
+        required: true
+        type: string
+      profile-dir:
+        description: 'Directory containing Conan profiles'
+        required: false
+        default: ''
+        type: string
+      github-owner:
+        description: 'GitHub owner/organization for the package registry'
+        required: false
+        default: 'saba-innowise'
+        type: string
+    secrets:
+      github-token:
+        description: 'GitHub token for authentication'
+        required: true
+
+jobs:
+  build-and-publish:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            conan-profile: linux-gcc
+          - os: windows-latest
+            platform: windows
+            conan-profile: windows-msvc
+          - os: macos-latest
+            platform: macos
+            conan-profile: macos-clang
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.platform }})
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Conan
+        run: |
+          pip install conan
+          conan --version
+
+      - name: Detect Conan profile
+        id: profile
+        shell: bash
+        run: |
+          conan profile detect --force
+          echo "Default profile created"
+
+      - name: Configure Conan remote
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.github-token }}
+        run: |
+          REMOTE_URL="https://conan.pkg.github.com/${{ inputs.github-owner }}"
+
+          # Remove remote if it exists (to update URL if needed)
+          conan remote remove ${{ inputs.remote-name }} 2>/dev/null || true
+
+          # Add the remote
+          conan remote add ${{ inputs.remote-name }} "${REMOTE_URL}"
+
+          # Authenticate with the remote
+          conan remote login ${{ inputs.remote-name }} ${{ github.actor }} -p "${GITHUB_TOKEN}"
+
+          echo "Configured remote: ${{ inputs.remote-name }} -> ${REMOTE_URL}"
+
+      - name: Determine full version
+        id: version
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version-suffix }}" ]; then
+            FULL_VERSION="${{ inputs.package-version }}-${{ inputs.version-suffix }}"
+          else
+            FULL_VERSION="${{ inputs.package-version }}"
+          fi
+          echo "full-version=${FULL_VERSION}" >> $GITHUB_OUTPUT
+          echo "Package version: ${FULL_VERSION}"
+
+      - name: Set version suffix environment
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.version-suffix }}" ]; then
+            echo "CONAN_VERSION_SUFFIX=${{ inputs.version-suffix }}" >> $GITHUB_ENV
+          fi
+
+      - name: Configure custom profile (if provided)
+        if: inputs.profile-dir != ''
+        shell: bash
+        run: |
+          # Full path for existence check (from repo root)
+          FULL_PROFILE_PATH="${{ inputs.source-dir }}/${{ inputs.profile-dir }}/${{ matrix.conan-profile }}"
+          # Relative path for conan (since conan runs with working-directory=source-dir)
+          RELATIVE_PROFILE_PATH="${{ inputs.profile-dir }}/${{ matrix.conan-profile }}"
+
+          if [ -f "${FULL_PROFILE_PATH}" ]; then
+            # Use absolute path to ensure conan finds it regardless of working directory
+            ABS_PROFILE_PATH="${GITHUB_WORKSPACE}/${FULL_PROFILE_PATH}"
+            echo "Using custom profile: ${ABS_PROFILE_PATH}"
+            echo "CONAN_PROFILE=${ABS_PROFILE_PATH}" >> $GITHUB_ENV
+          else
+            echo "Custom profile not found at ${FULL_PROFILE_PATH}, using default"
+            echo "CONAN_PROFILE=" >> $GITHUB_ENV
+          fi
+
+      - name: Create Conan package
+        shell: bash
+        working-directory: ${{ inputs.source-dir }}
+        run: |
+          PROFILE_ARG=""
+          if [ -n "${CONAN_PROFILE}" ]; then
+            PROFILE_ARG="--profile:host=${CONAN_PROFILE} --profile:build=${CONAN_PROFILE}"
+          fi
+
+          echo "Creating package: ${{ inputs.package-name }}/${{ steps.version.outputs.full-version }}"
+          conan create . ${PROFILE_ARG} --build=missing
+
+      - name: Upload package to remote
+        shell: bash
+        run: |
+          echo "Uploading ${{ inputs.package-name }}/${{ steps.version.outputs.full-version }} to ${{ inputs.remote-name }}"
+          conan upload "${{ inputs.package-name }}/${{ steps.version.outputs.full-version }}" \
+            --remote ${{ inputs.remote-name }} \
+            --confirm
+
+      - name: Verify upload
+        shell: bash
+        run: |
+          echo "Verifying package in remote..."
+          conan search "${{ inputs.package-name }}/${{ steps.version.outputs.full-version }}" \
+            --remote ${{ inputs.remote-name }} || echo "Package search completed"

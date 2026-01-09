@@ -20,7 +20,7 @@ inputs:
   github-owner:
     description: 'GitHub owner/organization for package remotes'
     required: false
-    default: 'saba-g467'
+    default: 'saba-innowise'
   setup-remotes:
     description: 'Whether to setup GitHub Packages remotes (conan-rc and conan-stable)'
     required: false
