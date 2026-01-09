@@ -12,23 +12,17 @@ on:
         default: false
         required: false
         type: boolean
+      os:
+        description: Source Directory
+        required: true
+        type: string
 
 jobs:
   build-and-test:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            shell: bash
-          - os: windows-latest
-            shell: pwsh
-          - os: macos-latest
-            shell: bash
+    runs-on: ${{ inputs.os }}
 
-    runs-on: ${{ matrix.os }}
     defaults:
       run:
-        shell: ${{ matrix.shell }}
         working-directory: ${{ inputs.source_directory }}
 
     steps:
@@ -63,5 +57,5 @@ jobs:
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: package
+          name: package-${{ inputs.os }}
           path: ${{ inputs.source_directory }}/build/
