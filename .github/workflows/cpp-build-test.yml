@@ -12,10 +12,6 @@ on:
         default: false
         required: false
         type: boolean
-    # secrets:
-    #   github-token:
-    #     description: "GitHub token for package registry access"
-    #     required: false
 
 jobs:
   build-and-test:
@@ -43,22 +39,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # - name: Setup GitHub Package Registry (if token provided)
-      #   run: |
-      #     if [ -n "$CONAN_PASSWORD" ]; then
-      #       conan remote add github "https://conan.pkg.github.com/${{ github.repository_owner }}" --force || true
-      #     else
-      #       echo "No GitHub token provided, skipping GitHub Package Registry setup"
-      #     fi
-      #   env:
-      #     CONAN_LOGIN_USERNAME: ${{ github.actor }}
-      #     CONAN_PASSWORD: ${{ secrets.github-token }}
-
       - name: Setup Conan
         uses: conan-io/setup-conan@v1
 
       - name: Unix Build
-        if: ${{ inputs.use-lockfile && runner.os != 'Windows' }}
+        if: ${{ runner.os != 'Windows' }}
         run: |
           conan profile detect --force
 
@@ -69,7 +54,7 @@ jobs:
             ${{ inputs.use_lockfile && '--lockfile=conan.lock' || '# do not use a lockfile' }}
 
       - name: Windows Build
-        if: ${{ inputs.use-lockfile && runner.os == 'Windows' }}
+        if: ${{ runner.os == 'Windows' }}
         run: |
           conan profile detect --force
 
@@ -82,8 +67,7 @@ jobs:
       - name: Upload Test Results
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ matrix.os }}
+          name: package
           path: |
             ${{ inputs.source_directory }}/build/**/Testing/
             ${{ inputs.source_directory }}/build/**/*test*.xml
-          if-no-files-found: ignore
