@@ -3,35 +3,20 @@ name: C++ Build and Test
 on:
   workflow_call:
     inputs:
-      source-dir:
-        description: 'Source directory containing conanfile and CMakeLists.txt'
-        required: false
+      source_directory:
+        description: Source Directory
+        default: tether_sum
+        required: true
         type: string
-        default: '.'
-      conan-options:
-        description: 'Additional Conan options (e.g., -o build_tests=True)'
-        required: false
-        type: string
-        default: ''
-      profile-dir:
-        description: 'Path to directory containing Conan profiles'
-        required: false
-        type: string
-        default: ''
-      use-lockfile:
-        description: 'Use lockfile for deterministic builds'
+      use_lockfile:
+        description: Use Existing Lockfile
+        default: false
         required: false
         type: boolean
-        default: false
-      lockfile-path:
-        description: 'Path to Conan lockfile (relative to source-dir)'
-        required: false
-        type: string
-        default: 'conan.lock'
-    secrets:
-      github-token:
-        description: 'GitHub token for package registry access'
-        required: false
+    # secrets:
+    #   github-token:
+    #     description: "GitHub token for package registry access"
+    #     required: false
 
 jobs:
   build-and-test:
@@ -53,155 +38,53 @@ jobs:
     defaults:
       run:
         shell: ${{ matrix.shell }}
+        working-directory: ${{ inputs.source_directory }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      # - name: Setup GitHub Package Registry (if token provided)
+      #   run: |
+      #     if [ -n "$CONAN_PASSWORD" ]; then
+      #       conan remote add github "https://conan.pkg.github.com/${{ github.repository_owner }}" --force || true
+      #     else
+      #       echo "No GitHub token provided, skipping GitHub Package Registry setup"
+      #     fi
+      #   env:
+      #     CONAN_LOGIN_USERNAME: ${{ github.actor }}
+      #     CONAN_PASSWORD: ${{ secrets.github-token }}
 
-      - name: Install Conan 2
-        run: |
-          pip install conan
+      - name: Setup Conan
+        uses: conan-io/setup-conan@v1
 
-      - name: Configure Conan
+      - name: Unix Build
+        if: ${{ inputs.use-lockfile && runner.os != 'Windows' }}
         run: |
           conan profile detect --force
 
-      - name: Setup GitHub Package Registry (if token provided)
-        shell: bash
-        run: |
-          if [ -n "$CONAN_PASSWORD" ]; then
-            conan remote add github "https://conan.pkg.github.com/${{ github.repository_owner }}" --force || true
-          else
-            echo "No GitHub token provided, skipping GitHub Package Registry setup"
-          fi
-        env:
-          CONAN_LOGIN_USERNAME: ${{ github.actor }}
-          CONAN_PASSWORD: ${{ secrets.github-token }}
-
-      - name: Detect custom Conan profile
-        id: profile
-        shell: bash
-        run: |
-          PROFILE_DIR="${{ inputs.profile-dir }}"
-          PROFILE_NAME="${{ matrix.profile }}"
-          SOURCE_DIR="${{ inputs.source-dir }}"
-
-          # Construct the full path for existence check (from repo root)
-          if [ -n "$PROFILE_DIR" ]; then
-            FULL_PROFILE_PATH="${SOURCE_DIR}/${PROFILE_DIR}/${PROFILE_NAME}"
-            # Relative path for conan (since conan runs with working-directory=source-dir)
-            RELATIVE_PROFILE_PATH="${PROFILE_DIR}/${PROFILE_NAME}"
-          else
-            FULL_PROFILE_PATH=""
-            RELATIVE_PROFILE_PATH=""
-          fi
-
-          # Check if custom profile exists
-          if [ -n "$FULL_PROFILE_PATH" ] && [ -f "$FULL_PROFILE_PATH" ]; then
-            # Use absolute path to ensure conan finds it regardless of working directory
-            ABS_PROFILE_PATH="${GITHUB_WORKSPACE}/${FULL_PROFILE_PATH}"
-            echo "profile_arg=-pr:h '${ABS_PROFILE_PATH}' -pr:b '${ABS_PROFILE_PATH}'" >> $GITHUB_OUTPUT
-            echo "Using custom profile: $ABS_PROFILE_PATH"
-          else
-            echo "profile_arg=" >> $GITHUB_OUTPUT
-            echo "Using default detected profile"
-          fi
-
-      - name: Cache Conan packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.conan2
-          key: conan-${{ matrix.os }}-${{ hashFiles('**/conanfile.py', '**/conanfile.txt', '**/conan.lock') }}
-          restore-keys: |
-            conan-${{ matrix.os }}-
-
-      - name: Install dependencies (with lockfile) - Unix
-        if: ${{ inputs.use-lockfile && runner.os != 'Windows' }}
-        shell: bash
-        working-directory: ${{ inputs.source-dir }}
-        run: |
-          conan install . \
+          conan build . \
+            -o build_tests=True \
+            -o run_tests=True \
             --build=missing \
-            --lockfile=${{ inputs.lockfile-path }} \
-            ${{ steps.profile.outputs.profile_arg }} \
-            ${{ inputs.conan-options }}
+            ${{ inputs.use_lockfile && '--lockfile=conan.lock' || '# do not use a lockfile' }}
 
-      - name: Install dependencies (with lockfile) - Windows
+      - name: Windows Build
         if: ${{ inputs.use-lockfile && runner.os == 'Windows' }}
-        shell: pwsh
-        working-directory: ${{ inputs.source-dir }}
         run: |
-          conan install . `
+          conan profile detect --force
+
+          conan build . `
+            -o build_tests=True `
+            -o run_tests=True `
             --build=missing `
-            --lockfile=${{ inputs.lockfile-path }} `
-            ${{ steps.profile.outputs.profile_arg }} `
-            ${{ inputs.conan-options }}
+            ${{ inputs.use_lockfile && '--lockfile=conan.lock' || '# do not use a lockfile' }}
 
-      - name: Install dependencies (without lockfile) - Unix
-        if: ${{ !inputs.use-lockfile && runner.os != 'Windows' }}
-        shell: bash
-        working-directory: ${{ inputs.source-dir }}
-        run: |
-          conan install . \
-            --build=missing \
-            ${{ steps.profile.outputs.profile_arg }} \
-            ${{ inputs.conan-options }}
-
-      - name: Install dependencies (without lockfile) - Windows
-        if: ${{ !inputs.use-lockfile && runner.os == 'Windows' }}
-        shell: pwsh
-        working-directory: ${{ inputs.source-dir }}
-        run: |
-          conan install . `
-            --build=missing `
-            ${{ steps.profile.outputs.profile_arg }} `
-            ${{ inputs.conan-options }}
-
-      - name: Configure CMake (Unix)
-        if: runner.os != 'Windows'
-        working-directory: ${{ inputs.source-dir }}
-        run: |
-          cmake --preset conan-release 2>/dev/null || cmake --preset conan-default 2>/dev/null || {
-            TOOLCHAIN_FILE="build/generators/conan_toolchain.cmake"
-            if [ ! -f "$TOOLCHAIN_FILE" ] && [ -f "build/Release/generators/conan_toolchain.cmake" ]; then
-              TOOLCHAIN_FILE="build/Release/generators/conan_toolchain.cmake"
-            fi
-            if [ -z "$TOOLCHAIN_FILE" ] || [ ! -f "$TOOLCHAIN_FILE" ]; then
-              echo "::error::No conan toolchain file found. Conan install may have failed."
-              exit 1
-            fi
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}"
-          }
-
-      - name: Configure CMake (Windows)
-        if: runner.os == 'Windows'
-        working-directory: ${{ inputs.source-dir }}
-        run: |
-          cmake --preset conan-release 2>$null
-          if ($LASTEXITCODE -ne 0) { cmake --preset conan-default 2>$null }
-          if ($LASTEXITCODE -ne 0) { cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=build/generators/conan_toolchain.cmake }
-
-      - name: Build
-        working-directory: ${{ inputs.source-dir }}
-        run: |
-          cmake --build --preset conan-release --parallel || cmake --build build --config Release --parallel
-
-      - name: Run tests
-        working-directory: ${{ inputs.source-dir }}
-        run: |
-          ctest --preset conan-release --output-on-failure --parallel || ctest --test-dir build --build-config Release --output-on-failure --parallel
-
-      - name: Upload test results
-        if: always()
+      - name: Upload Test Results
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ matrix.os }}
           path: |
-            ${{ inputs.source-dir }}/build/**/Testing/
-            ${{ inputs.source-dir }}/build/**/*test*.xml
+            ${{ inputs.source_directory }}/build/**/Testing/
+            ${{ inputs.source_directory }}/build/**/*test*.xml
           if-no-files-found: ignore
