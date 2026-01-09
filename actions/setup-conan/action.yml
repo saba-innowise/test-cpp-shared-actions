@@ -1,0 +1,110 @@
+name: 'Setup Conan 2'
+description: 'Install and configure Conan 2 package manager with GitHub Packages remotes'
+
+inputs:
+  conan-version:
+    description: 'Conan version to install'
+    required: false
+    default: '2.10.2'
+  profile:
+    description: 'Conan profile name to use/create'
+    required: false
+    default: ''
+  profile-path:
+    description: 'Path to custom Conan profile file to copy'
+    required: false
+    default: ''
+  github-token:
+    description: 'GitHub token for authenticating with GitHub Packages'
+    required: true
+  github-owner:
+    description: 'GitHub owner/organization for package remotes'
+    required: false
+    default: 'saba-g467'
+  setup-remotes:
+    description: 'Whether to setup GitHub Packages remotes (conan-rc and conan-stable)'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install Conan
+      shell: bash
+      run: |
+        pip install conan==${{ inputs.conan-version }}
+        conan --version
+
+    - name: Detect or create default Conan profile
+      shell: bash
+      run: |
+        if ! conan profile list | grep -q "default"; then
+          echo "Creating default Conan profile..."
+          conan profile detect
+        else
+          echo "Default Conan profile already exists"
+        fi
+        echo "Default profile:"
+        conan profile show
+
+    - name: Setup custom profile
+      if: inputs.profile-path != ''
+      shell: bash
+      run: |
+        PROFILE_NAME="${{ inputs.profile }}"
+        if [ -z "$PROFILE_NAME" ]; then
+          PROFILE_NAME="custom"
+        fi
+
+        CONAN_HOME=$(conan config home)
+        PROFILES_DIR="$CONAN_HOME/profiles"
+        mkdir -p "$PROFILES_DIR"
+
+        echo "Copying custom profile from ${{ inputs.profile-path }} to $PROFILES_DIR/$PROFILE_NAME"
+        cp "${{ inputs.profile-path }}" "$PROFILES_DIR/$PROFILE_NAME"
+
+        echo "Custom profile '$PROFILE_NAME':"
+        conan profile show -pr "$PROFILE_NAME"
+
+    - name: Setup GitHub Packages remotes
+      if: inputs.setup-remotes == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_OWNER: ${{ inputs.github-owner }}
+      run: |
+        # Add conan-rc remote (release candidates)
+        CONAN_RC_URL="https://nuget.pkg.github.com/${GITHUB_OWNER}/conan-rc"
+        echo "Adding conan-rc remote: $CONAN_RC_URL"
+        conan remote add conan-rc "$CONAN_RC_URL" --force
+
+        # Add conan-stable remote (stable releases)
+        CONAN_STABLE_URL="https://nuget.pkg.github.com/${GITHUB_OWNER}/conan-stable"
+        echo "Adding conan-stable remote: $CONAN_STABLE_URL"
+        conan remote add conan-stable "$CONAN_STABLE_URL" --force
+
+        # List configured remotes
+        echo "Configured remotes:"
+        conan remote list
+
+    - name: Authenticate with GitHub Packages
+      if: inputs.setup-remotes == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        GITHUB_OWNER: ${{ inputs.github-owner }}
+      run: |
+        # Authenticate with conan-rc remote
+        echo "Authenticating with conan-rc remote..."
+        conan remote login conan-rc "$GITHUB_OWNER" -p "$GITHUB_TOKEN"
+
+        # Authenticate with conan-stable remote
+        echo "Authenticating with conan-stable remote..."
+        conan remote login conan-stable "$GITHUB_OWNER" -p "$GITHUB_TOKEN"
+
+        echo "Authentication complete"

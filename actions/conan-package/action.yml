@@ -1,0 +1,168 @@
+name: 'Conan Package'
+description: 'Create and optionally upload a Conan package'
+
+inputs:
+  source-dir:
+    description: 'Directory containing the conanfile.py'
+    required: false
+    default: '.'
+  package-name:
+    description: 'Name of the Conan package'
+    required: true
+  package-version:
+    description: 'Version of the package (e.g., 1.0.0)'
+    required: true
+  version-suffix:
+    description: 'Optional version suffix for RC builds (e.g., -dev-abc123)'
+    required: false
+    default: ''
+  profile:
+    description: 'Conan profile to use for building'
+    required: false
+    default: ''
+  remote:
+    description: 'Conan remote name for uploading packages'
+    required: false
+    default: ''
+  upload:
+    description: 'Whether to upload the package to the remote'
+    required: false
+    default: 'false'
+  build-options:
+    description: 'Additional build options (e.g., -o build_tests=True -o shared=True)'
+    required: false
+    default: ''
+
+outputs:
+  package-reference:
+    description: 'Full Conan package reference (name/version)'
+    value: ${{ steps.create-package.outputs.package_reference }}
+  package-full-reference:
+    description: 'Full Conan package reference with revision'
+    value: ${{ steps.create-package.outputs.package_full_reference }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.package-name }}" ]; then
+          echo "::error::package-name is required"
+          exit 1
+        fi
+        if [ -z "${{ inputs.package-version }}" ]; then
+          echo "::error::package-version is required"
+          exit 1
+        fi
+        if [ "${{ inputs.upload }}" = "true" ] && [ -z "${{ inputs.remote }}" ]; then
+          echo "::error::remote is required when upload is true"
+          exit 1
+        fi
+
+    - name: Build package reference
+      id: build-reference
+      shell: bash
+      run: |
+        PACKAGE_NAME="${{ inputs.package-name }}"
+        PACKAGE_VERSION="${{ inputs.package-version }}"
+        VERSION_SUFFIX="${{ inputs.version-suffix }}"
+
+        # Construct full version with optional suffix
+        FULL_VERSION="${PACKAGE_VERSION}${VERSION_SUFFIX}"
+        PACKAGE_REFERENCE="${PACKAGE_NAME}/${FULL_VERSION}"
+
+        echo "Package reference: ${PACKAGE_REFERENCE}"
+        echo "package_reference=${PACKAGE_REFERENCE}" >> $GITHUB_OUTPUT
+        echo "full_version=${FULL_VERSION}" >> $GITHUB_OUTPUT
+
+    - name: Build Conan create command
+      id: build-command
+      shell: bash
+      run: |
+        SOURCE_DIR="${{ inputs.source-dir }}"
+        PACKAGE_REF="${{ steps.build-reference.outputs.package_reference }}"
+        PROFILE="${{ inputs.profile }}"
+        BUILD_OPTIONS="${{ inputs.build-options }}"
+
+        # Start building the command
+        CMD="conan create \"${SOURCE_DIR}\" --name=${{ inputs.package-name }} --version=${{ steps.build-reference.outputs.full_version }}"
+
+        # Add profile if specified
+        if [ -n "${PROFILE}" ]; then
+          CMD="${CMD} --profile:host=${PROFILE} --profile:build=${PROFILE}"
+        fi
+
+        # Add build options if specified
+        if [ -n "${BUILD_OPTIONS}" ]; then
+          CMD="${CMD} ${BUILD_OPTIONS}"
+        fi
+
+        echo "Conan create command: ${CMD}"
+        echo "create_command=${CMD}" >> $GITHUB_OUTPUT
+
+    - name: Create Conan package
+      id: create-package
+      shell: bash
+      run: |
+        echo "========================================"
+        echo "Creating Conan package..."
+        echo "========================================"
+
+        # Execute the conan create command
+        ${{ steps.build-command.outputs.create_command }}
+
+        PACKAGE_REF="${{ steps.build-reference.outputs.package_reference }}"
+
+        # Get package info for the full reference with revision
+        FULL_REF=$(conan list "${PACKAGE_REF}:*" --format=json 2>/dev/null | jq -r 'keys[0]' 2>/dev/null || echo "${PACKAGE_REF}")
+
+        echo "Package created successfully: ${PACKAGE_REF}"
+        echo "package_reference=${PACKAGE_REF}" >> $GITHUB_OUTPUT
+        echo "package_full_reference=${FULL_REF}" >> $GITHUB_OUTPUT
+
+    - name: Upload package to remote
+      if: inputs.upload == 'true'
+      shell: bash
+      run: |
+        PACKAGE_REF="${{ steps.build-reference.outputs.package_reference }}"
+        REMOTE="${{ inputs.remote }}"
+
+        echo "========================================"
+        echo "Uploading package to remote: ${REMOTE}"
+        echo "========================================"
+
+        # Upload the package
+        conan upload "${PACKAGE_REF}" --remote="${REMOTE}" --confirm
+
+        echo "Package uploaded successfully to ${REMOTE}"
+
+    - name: Summary
+      shell: bash
+      run: |
+        PACKAGE_REF="${{ steps.build-reference.outputs.package_reference }}"
+
+        echo "## Conan Package Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Package:** ${PACKAGE_REF}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Source directory:** ${{ inputs.source-dir }}" >> $GITHUB_STEP_SUMMARY
+
+        if [ -n "${{ inputs.profile }}" ]; then
+          echo "- **Profile:** ${{ inputs.profile }}" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        if [ -n "${{ inputs.build-options }}" ]; then
+          echo "- **Build options:** ${{ inputs.build-options }}" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        if [ -n "${{ inputs.version-suffix }}" ]; then
+          echo "- **Version suffix:** ${{ inputs.version-suffix }}" >> $GITHUB_STEP_SUMMARY
+        fi
+
+        echo "" >> $GITHUB_STEP_SUMMARY
+
+        if [ "${{ inputs.upload }}" = "true" ]; then
+          echo ":white_check_mark: Package created and uploaded to **${{ inputs.remote }}**" >> $GITHUB_STEP_SUMMARY
+        else
+          echo ":white_check_mark: Package created successfully" >> $GITHUB_STEP_SUMMARY
+        fi

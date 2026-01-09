@@ -1,0 +1,91 @@
+name: 'CMake Build'
+description: 'Configure and build CMake projects with optional preset support and testing'
+
+inputs:
+  source-dir:
+    description: 'Source directory containing CMakeLists.txt'
+    required: false
+    default: '.'
+  build-dir:
+    description: 'Build output directory'
+    required: false
+    default: 'build'
+  preset:
+    description: 'CMake preset name (e.g., conan-default, conan-release). If specified, preset-based configuration is used'
+    required: false
+    default: ''
+  build-type:
+    description: 'Build type (Release, Debug, RelWithDebInfo, MinSizeRel). Used when preset is not specified'
+    required: false
+    default: 'Release'
+  cmake-options:
+    description: 'Additional CMake configuration options'
+    required: false
+    default: ''
+  run-tests:
+    description: 'Run tests with ctest after build'
+    required: false
+    default: 'false'
+  test-preset:
+    description: 'CTest preset name for running tests. If not specified, uses standard ctest invocation'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Configure CMake (with preset)
+      if: inputs.preset != ''
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        echo "::group::CMake Configure (preset: ${{ inputs.preset }})"
+        cmake --preset ${{ inputs.preset }} ${{ inputs.cmake-options }}
+        echo "::endgroup::"
+
+    - name: Configure CMake (manual)
+      if: inputs.preset == ''
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        echo "::group::CMake Configure (build-type: ${{ inputs.build-type }})"
+        cmake -S . -B ${{ inputs.build-dir }} \
+          -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} \
+          ${{ inputs.cmake-options }}
+        echo "::endgroup::"
+
+    - name: Build (with preset)
+      if: inputs.preset != ''
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        echo "::group::CMake Build (preset: ${{ inputs.preset }})"
+        cmake --build --preset ${{ inputs.preset }}
+        echo "::endgroup::"
+
+    - name: Build (manual)
+      if: inputs.preset == ''
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        echo "::group::CMake Build"
+        cmake --build ${{ inputs.build-dir }} --config ${{ inputs.build-type }}
+        echo "::endgroup::"
+
+    - name: Run Tests (with preset)
+      if: inputs.run-tests == 'true' && inputs.test-preset != ''
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        echo "::group::CTest (preset: ${{ inputs.test-preset }})"
+        ctest --preset ${{ inputs.test-preset }} --output-on-failure
+        echo "::endgroup::"
+
+    - name: Run Tests (manual)
+      if: inputs.run-tests == 'true' && inputs.test-preset == ''
+      shell: bash
+      working-directory: ${{ inputs.source-dir }}
+      run: |
+        echo "::group::CTest"
+        ctest --test-dir ${{ inputs.build-dir }} --build-config ${{ inputs.build-type }} --output-on-failure
+        echo "::endgroup::"
