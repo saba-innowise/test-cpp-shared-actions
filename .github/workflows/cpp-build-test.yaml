@@ -1,0 +1,90 @@
+name: C++ Build and Test
+
+on:
+  workflow_call:
+    inputs:
+      package_name:
+        description: Package Name
+        required: true
+        type: string
+      source_directory:
+        description: Source Directory
+        required: true
+        type: string
+      runner:
+        description: GitHub Actions Runner
+        required: true
+        type: string
+      conan_profile:
+        description: Conan Profile File Path
+        required: true
+        type: string
+      use_lockfile:
+        description: Use Existing Lockfile
+        default: false
+        required: false
+        type: boolean
+      # environment is used for conan remote configuration
+      environment:
+        description: GitHub Environment Name
+        default: default
+        required: false
+        type: string
+    secrets:
+      CONAN_REMOTE_PASSWORD:
+        required: false
+
+jobs:
+  build-and-test:
+    name: Build & Test (${{ inputs.runner }})
+    runs-on: ${{ inputs.runner }}
+    environment:
+      name: ${{ inputs.environment }}
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.source_directory }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Conan
+        uses: conan-io/setup-conan@v1
+
+      - name: Unix Build
+        if: ${{ runner.os != 'Windows' }}
+        run: |
+          COMMIT_HASH='${{ github.sha }}'
+          if [ '${{ inputs.environment }}' = 'rc' ]; then
+            export CONAN_VERSION_SUFFIX="dev-${COMMIT_HASH::7}"
+          fi
+
+          conan create . \
+            --profile ${{ inputs.conan_profile }} \
+            --options build_tests=True \
+            --options run_tests=True \
+            --build=missing \
+            ${{ inputs.use_lockfile && '--lockfile=conan.lock' || '# do not use a lockfile' }}
+
+      - name: Windows Build
+        if: ${{ runner.os == 'Windows' }}
+        run: |
+          $commitHash = "${{ github.sha }}"
+          if ("${{ inputs.environment }}" -eq "rc") {
+            $env:CONAN_VERSION_SUFFIX = "dev-$($commitHash.Substring(0,7))"
+          }
+
+          conan create . `
+            --profile ${{ inputs.conan_profile }} `
+            --options build_tests=True `
+            --options run_tests=True `
+            --build=missing `
+            ${{ inputs.use_lockfile && '--lockfile=conan.lock' || '# do not use a lockfile' }}
+
+      - name: Upload Conan Package
+        if: ${{ inputs.environment != 'default' }}
+        run: |
+          conan remote add ${{ vars.CONAN_REMOTE_NAME }} ${{ vars.CONAN_REMOTE_URL }}
+          conan remote login --password '${{ secrets.CONAN_REMOTE_PASSWORD }}' ${{ vars.CONAN_REMOTE_NAME }} ${{ vars.CONAN_REMOTE_USERNAME }}
+          conan upload ${{ inputs.package_name }} --remote ${{ vars.CONAN_REMOTE_NAME }}

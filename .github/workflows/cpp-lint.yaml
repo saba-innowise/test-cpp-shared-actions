@@ -1,0 +1,21 @@
+name: C++ Lint (clang-format)
+
+on:
+  workflow_call:
+
+jobs:
+  clang-format-check:
+    name: Check Formatting
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # check formatting of all c++ files tracked by git
+      - name: Check Formatting
+        run: |
+          FILES=$(git ls-files '*.c' '*.cc' '*.cpp' '*.h' '*.hh' '*.hpp')
+          [ -z "$FILES" ] && exit 0
+          echo "$FILES" | xargs -r clang-format -style=LLVM -i
+          git diff --exit-code
