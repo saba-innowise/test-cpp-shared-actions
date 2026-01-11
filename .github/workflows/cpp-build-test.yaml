@@ -19,11 +19,6 @@ on:
         description: Conan Profile File Path
         required: true
         type: string
-      use_lockfile:
-        description: Use Existing Lockfile
-        default: false
-        required: false
-        type: boolean
       # environment is used for conan remote configuration
       environment:
         description: GitHub Environment Name
@@ -65,7 +60,7 @@ jobs:
             --options build_tests=True \
             --options run_tests=True \
             --build=missing \
-            ${{ inputs.use_lockfile && '--lockfile=conan.lock' || '# do not use a lockfile' }}
+            --lockfile=conan.lock
 
       - name: Windows Build
         if: ${{ runner.os == 'Windows' }}
@@ -80,7 +75,7 @@ jobs:
             --options build_tests=True `
             --options run_tests=True `
             --build=missing `
-            ${{ inputs.use_lockfile && '--lockfile=conan.lock' || '# do not use a lockfile' }}
+            --lockfile=conan.lock
 
       - name: Upload Conan Package
         if: ${{ inputs.environment != 'default' }}
